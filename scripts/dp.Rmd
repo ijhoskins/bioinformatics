@@ -1,0 +1,330 @@
+---
+title: "Dynamic programming in R"
+author: "Ian Hoskins"
+date: "2/1/2020"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Dynamic programming for sequence alignment
+
+We want to align two sequences x and y, of lengths m and n. m and n may be different, as we allow insertions and deletions (gaps) in the alignments as well as substitutions. The Levenshtein distance (or edit distance) describes the number of operations one would have to perform on one string to convert it to another string. This can be solved through dynamic programming (DP), an efficient alternative to a recursive algorithm.
+
+Dynamic programming algorithms differ from recursive functions in that they "build up" instead of following a recursive "top-down" process. Another way to think about this is that we start from the beginning of the data instead of the end. In the context of two DNA sequences, we are comparing all pairs of bases between two sequences as we start from the first base to the last. In comparing bases, we assign a score for each way the bases could be compared.
+
+For each base pair comparison ask the question: what is the max score for these 3 options?
+
+1. Match or mismatch between bases.
+2. Sequence 1 base aligns to a gap.
+3. Sequence 2 base aligns to a gap.
+
+We determine which of these leads to the highest score. Thus, for every new pair of bases to compare/align, we determine the best of three options. 
+
+Now, to extend this to finding the optimal alignment between full sequences, all we must due is keep track of how preceding bases scored when we calculate the next pairs' score. If at each point, we keep asking "what is the max score of the preceding options?", we can find the alignment at each step that maximizes the overall score, considering all preceding bases. Dynamic programming algorithms solve this problem in O(n*m) time (as opposed to exponential time) where n and m are the lengths of the sequence strings. Thus they are faster than top-down recursion algorithms (for high n), though they are not optimal for searching large sequence spaces for a match.
+
+Aligning x and y means that our final (potentially gapped) alignment will have no more than n + m columns. The alignment never has two gaps aligned to each other. But we may have as many gaps aligned to bases in one sequence as the number of bases in it. Such possible solutions exist, although they are likely not the best solutions. The best solution maximizes the alignment score. A DP algorithm is guaranteed to return the best alignment if our DP graph is searched exhaustively; although many variants of DP algorithms provide speed improvements at the expense of the optimal solution. I use the term _graph_ to mean a directed acyclic graph (DAG), where there are directed edges between vertices of the graph, and directed cycles are not permitted (paths that cycle infinitely).
+
+```{r Smith-Waterman local alignment}
+
+## Specifically, the function should take two strings in additon to scores for match, mismatch, gap open and gap extend
+## Note that all mismatches will have the same score for this question. 
+## The output should be optimal alignment and the associated score
+
+
+# First, because the question asks us to implement affine gap penalties
+# into our function, we must define a function that recurses
+# along horizontal and vertical edges
+
+#' Recursive function to determine gap open versus extend
+#'
+#' @param dpt matrix dynamic programming table with scores filled in for all values < i and < j
+#' @param i integer index of first sequence
+#' @param j integer index of second sequence
+#' @param backtrack_matrix matrix for storing path
+#' @param direction character either "top" or "left", whether to recurse horizontally or vertically
+#' @param gap_open integer penalty for opening a gap
+#' @param gap_extend integer penalty for extending a gap
+#' @return integer score
+recurse_gap<- function(dpt, i, j, backtrack_matrix, 
+                       direction="top", gap_open=-2, gap_extend=-1){
+  
+  # Inclusion of the direction allows for this recursion to be used for
+  # both horizontal and vertical recursion in the dpt
+  if(direction=="top"){
+    
+    if(dpt[i-1, j]<=0){
+      return(0)
+      }
+    
+    res<- c(dpt[i-1, j] + gap_open + gap_extend, 
+            recurse_gap(dpt, i-1, j, backtrack_matrix, 
+                        direction="top") + gap_extend)
+    
+    max_score<- which.max(res)
+  
+    if(max_score==2){
+      backtrack_matrix[i-1, j]<- "top"
+    }
+    
+    res_choice<- res[max_score]
+    return(res_choice)
+    
+  } else if(direction=="left"){
+    
+    if(dpt[i, j-1]<=0){
+      return(0)
+      }
+    
+    res<- c(dpt[i, j-1] + gap_open + gap_extend, 
+            recurse_gap(dpt, i, j-1, backtrack_matrix, 
+                        direction="left") + gap_extend)
+    
+    max_score<- which.max(res)
+  
+    if(max_score==2){
+      backtrack_matrix[i, j-1]<- "left"
+    }
+    
+    res_choice<- res[max_score]
+    return(res_choice)
+  } else {
+    stop("direction must be either top or left.")
+  }
+}
+
+
+#' Smith-Waterman local pairwise alignment
+#'
+#' @param v character string of the first sequence
+#' @param w character string of the second sequence
+#' @param match_score integer score for matching column
+#' @param mismatch_score integer score for mismatching column
+#' @param gap_open integer penalty for opening a gap
+#' @param gap_extend integer penalty for extending a gap
+#' @return list optimal alignment and associated score
+smith_waterman_pairwise<- function(v, w, match_score=1, mismatch_score=-1, gap_open=-2, gap_extend=-1){
+  
+  # Plus 1 for the dpt because we need an additional row and column
+  len_v<- nchar(v) + 1
+  len_w<- nchar(w) + 1
+  
+  # Init a dynamic programming table and a backtracking matrix
+  dpt<- matrix(data=0, nrow=len_v, ncol=len_w)
+  backtrack_matrix<- matrix(nrow=len_v, ncol=len_w)
+  
+  dpt[1,]<- rep(0,len_w)
+  dpt[,1]<- rep(0,len_v)
+  
+  # Fill in the dpt and store path in the backtracking matrix
+  for(i in 2:len_v){
+    for(j in 2:len_w){
+      
+      # Get the score of the predecessors to the vertex in question
+      top_pred<- dpt[i - 1, j]
+      left_pred<- dpt[i, j - 1]
+      diag_pred<- dpt[i - 1, j - 1]
+      
+      # These recursions are for inclusion of affine gap penalties
+      top_best<- recurse_gap(dpt=dpt, i=i, j=j, backtrack_matrix=backtrack_matrix,
+                             direction="top", gap_open=gap_open, gap_extend=gap_extend)
+      
+      left_best<- recurse_gap(dpt=dpt, i=i, j=j, backtrack_matrix=backtrack_matrix, 
+                              direction="left", gap_open=gap_open, gap_extend=gap_extend)
+      
+      # If we have a match, add a match score, else a mismatch score
+      if(substr(v, i, i) == substr(w, j, j)){
+        diag_best<- diag_pred + match_score
+      } else {
+        diag_best<- diag_pred + mismatch_score
+      }
+      
+      # Determine the highest scoring predecessor, and store in the table
+      all_preds<- c(top_best, left_best, diag_best, 0)
+      max_pred<- all_preds[which.max(all_preds)]
+      dpt[i,j]<- max_pred
+      
+      # Also store some backtracking pointers to recreate the best path
+      # if top_pred is equivalent to the other predecessor scores + edge scores
+      # just pick the top predecessor
+      if(max_pred == top_pred){
+        backtrack_matrix[i,j]<- "top"
+      } else if (max_pred == left_pred) {
+        backtrack_matrix[i,j]<- "left"
+      } else {
+        backtrack_matrix[i,j]<- "diag"
+      }
+    }
+  }
+  
+  # Determine the max element in the dpt, this is where
+  # we start backtracking for local alignment (unlike
+  # global alignment where we start from the bottom right
+  # corner of the dpt).
+  dpt_max<- which(dpt==max(dpt), arr.ind=TRUE)
+  
+  # If we have more than one max score in the dpt,
+  # just pick the first; improvements could be made
+  # to this function to make better decisions as 
+  # to which is the best alignment
+  if(nrow(dpt_max)>1){
+    dpt_max<- dpt_max[1,]
+  }
+  
+  # Annotate the backtrack with the sequence strings
+  v_list<- unlist(strsplit(v, ""))
+  c_list<- unlist(strsplit(w, ""))
+  rownames(backtrack_matrix)<- v_list
+  colnames(backtrack_matrix)<- c_list
+  
+  # Finally determine the optimal alignment based on backtracking pointers
+  v_opt_align<- c()
+  v_opt_align<- c()
+  m<- dpt_max[1]
+  n<- dpt_max[2]
+  backtrack_pointer<- backtrack_matrix[m,n]
+  
+  while(backtrack_pointer!=0){
+    
+    backtrack_pointer<- backtrack_matrix[m,n]
+    
+    if(backtrack_pointer==0){
+      break
+    }
+    
+    if(backtrack_pointer=="top"){
+      
+      v_opt_align<- c(v_list[m-1], v_opt_align)
+      w_opt_align<- c(gap_char, w_opt_align)
+      m<- m - 1
+      
+      } else if(backtrack_pointer=="left"){
+      
+        v_opt_align<- c(gap_char, v_opt_align)
+        w_opt_align<- c(w_list[n-1], w_opt_align)
+        n<- n - 1
+        
+        } else if(backtrack_pointer=="diag"){
+      
+          v_opt_align<- c(v_list[m-1], v_opt_align)
+          w_opt_align<- c(w_list[n-1], w_opt_align)
+          m<- m - 1
+          n<- n - 1
+        }
+  }
+  
+  final_res<- list(Alignment=rbind(v_opt_align, w_opt_align), 
+                   Score=dpt[dpt_max[1], dpt_max[2]],
+                   Edit_graph=dpt,
+                   Backtrack=backtrack_matrix)
+  
+  return(final_res)
+}
+
+
+#' Needleman-Wunsch global pairwise alignment
+#'
+#' @param v character string of the first sequence
+#' @param w character string of the second sequence
+#' @param match_score integer score for matching column, usually positive
+#' @param mismatch_score integer score for mismatching column, usually negative
+#' @param gap_open_penalty integer score for gap open, usually negative
+#' @return list optimal alignment and associated score
+needleman_wunsch_pairwise<- function(v, w, match_score=1, mismatch_penalty=-1, gap_open_penalty=-2){
+  
+  # Plus 1 for the dpt because we need an additional row and column
+  len_v<- nchar(v) + 1
+  len_w<- nchar(w) + 1
+  gap_char<- "-"
+  
+  # Init a dynamic programming table and a backtracking matrix
+  dpt<- matrix(data=0, nrow=len_v, ncol=len_w)
+  backtrack_matrix<- matrix(nrow=len_v, ncol=len_w)
+  
+  # Initialize the dpt; this is specific to global alignment
+  # otherwise, assign 0s for local
+  dpt[,1]<- gap_open_penalty*(0:(nrow(dpt)-1))
+  dpt[1,]<- gap_open_penalty*(0:(ncol(dpt)-1))
+  dpt[1,1]<- 0
+  
+  # Fill in the dpt and store path in the backtracking matrix
+  for(i in 2:len_v){
+    for(j in 2:len_w){
+      
+      # If we have a match, add a match score, else a mismatch score
+      if(substr(v, i, i) == substr(w, j, j)){
+        diag_pred<- dpt[i - 1, j - 1] + match_score
+      } else {
+        diag_pred<- dpt[i - 1, j - 1] + mismatch_penalty
+      }
+      
+      # Get the score of the predecessors to the vertex in question
+      top_pred<- dpt[i - 1, j] + gap_open_penalty
+      left_pred<- dpt[i, j - 1] + gap_open_penalty
+      
+      # Determine the highest scoring predecessor, and store in the table
+      all_preds<- c(top_pred, left_pred, diag_pred)
+      max_pred<- all_preds[which.max(all_preds)]
+      dpt[i,j]<- max_pred
+      
+      # Also store some backtracking pointers to recreate the best path
+      if(max_pred == diag_pred){
+        backtrack_matrix[i,j]<- "diag"
+      } else if (max_pred == left_pred) {
+        backtrack_matrix[i,j]<- "left"
+      } else {
+        backtrack_matrix[i,j]<- "top"
+      }
+    }
+  }
+
+  # Finally determine the optimal alignment based on backtracking pointers
+  v_list<- unlist(strsplit(v, ""))
+  w_list<- unlist(strsplit(w, ""))
+  v_opt_align<- c()
+  w_opt_align<- c()
+  m<- nrow(backtrack_matrix)
+  n<- ncol(backtrack_matrix)
+  backtrack_pointer<- backtrack_matrix[m,n]
+  
+  while(!is.na(backtrack_pointer)){
+    
+    backtrack_pointer<- backtrack_matrix[m,n]
+    
+    if(is.na(backtrack_pointer)){
+      break
+    }
+    
+    if(backtrack_pointer=="top"){
+      
+      v_opt_align<- c(v_list[m-1], v_opt_align)
+      w_opt_align<- c(gap_char, w_opt_align)
+      m<- m - 1
+      
+      } else if(backtrack_pointer=="left"){
+      
+        v_opt_align<- c(gap_char, v_opt_align)
+        w_opt_align<- c(w_list[n-1], w_opt_align)
+        n<- n - 1
+        
+        } else if(backtrack_pointer=="diag"){
+      
+          v_opt_align<- c(v_list[m-1], v_opt_align)
+          w_opt_align<- c(w_list[n-1], w_opt_align)
+          m<- m - 1
+          n<- n - 1
+        }
+    }
+  
+  final_res<- list(Alignment=rbind(v_opt_align, w_opt_align), 
+                   Alignment_score=dpt[nrow(dpt),ncol(dpt)],
+                   Edit_graph=dpt,
+                   Backtrack=backtrack_matrix)
+  
+  return(final_res)
+}
+
+```
+
